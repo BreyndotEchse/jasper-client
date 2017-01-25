@@ -363,6 +363,8 @@ class GoogleSTT(AbstractSTTEngine):
                 profile = yaml.safe_load(f)
                 if 'keys' in profile and 'GOOGLE_SPEECH' in profile['keys']:
                     config['api_key'] = profile['keys']['GOOGLE_SPEECH']
+                if 'google' in profile and 'language' in profile['google']:
+                    config['language'] = profile['google']['language']
         return config
 
     def transcribe(self, fp):
@@ -619,6 +621,96 @@ class WitAiSTT(AbstractSTTEngine):
     @classmethod
     def is_available(cls):
         return diagnose.check_network_connection()
+
+
+class SnowboyHotword(AbstractSTTEngine):
+    """
+    Snowboy hotword detection
+    Visit https://snowboy.kitt.ai/ for more information.
+    """
+
+    SLUG = 'snowboy'
+
+    def __init__(self, decoder_model="snowboy/model.pmdl",
+                 resource_file="snowboy/resources/common.res",
+                 audio_gain=1):
+
+        """
+        Initiates the snowboy hotword detector instance.
+        """
+
+        from snowboy import snowboydetect
+        
+        self._logger = logging.getLogger(__name__)
+        self._logger.debug("Initializing Snowboy Decoder with model " +
+                           "'%s'", decoder_model)
+                           
+        top_dir = os.path.dirname(os.path.abspath(__file__))
+        decoder_model = top_dir + "/" + decoder_model
+        resource_file = top_dir + "/" + resource_file
+
+        # Perform check on snowboy binary _snowboydetect.so
+        if not os.path.exists(decoder_model):
+            msg = ("Snowboydetect binary '%s/_snowboydetect.so' does not exist!") % top_dir
+            self._logger.error(msg)
+            raise RuntimeError(msg)
+        # Perform check on model file
+        if not os.path.exists(decoder_model):
+            msg = ("decoder_model '%s' does not exist!") % decoder_model
+            self._logger.error(msg)
+            raise RuntimeError(msg)
+        # Perform check on resource file
+        if not os.path.exists(resource_file):
+            msg = ("resource_file '%s' does not exist!") % resource_file
+            self._logger.error(msg)
+            raise RuntimeError(msg)
+
+        self._decoder = snowboydetect.SnowboyDetect(resource_filename=resource_file.encode(), model_str=decoder_model.encode())
+        self._decoder.SetAudioGain(audio_gain)
+
+    @classmethod
+    def get_config(cls):
+        # FIXME: Replace this as soon as we have a config module
+        config = {}
+        # Try to get wit.ai Auth token from config
+        profile_path = jasperpath.config('profile.yml')
+        if os.path.exists(profile_path):
+            with open(profile_path, 'r') as f:
+                profile = yaml.safe_load(f)
+                if 'snowboy' in profile:
+                    if 'decoder_model' in profile['snowboy']:
+                        config['decoder_model'] = profile['snowboy']['decoder_model']
+                    if 'resource_file' in profile['snowboy']:
+                        config['resource_file'] = profile['snowboy']['resource_file']
+                    if 'audio_gain' in profile['snowboy']:
+                        config['audio_gain'] = profile['snowboy']['audio_gain']
+        return config
+
+    def transcribe(self, fp):
+        """
+        Performs hotword detection.
+
+        Arguments:
+            fp -- a file object containing audio data
+        """
+
+        fp.seek(44)
+
+        data = fp.read()
+        ans = self._decoder.RunDetection(data)
+        if ans == -1:
+            self._logger.error("Error initializing streams or reading audio data")
+            return "";
+        elif ans > 0:
+            message = ("Keyword '%s' detected") % str(ans)
+            self._logger.info(message)
+            return ["JASPER"]
+        return ""
+
+    @classmethod
+    def is_available(cls):
+        return True
+        # return diagnose.check_python_import('snowboydetect')
 
 
 def get_engine_by_slug(slug=None):
